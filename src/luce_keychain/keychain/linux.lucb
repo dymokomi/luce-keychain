@@ -1,0 +1,146 @@
+#==============================================================================================
+#
+#   keychain/linux - The Secret Service through libsecret
+#
+#   DESCRIPTION:
+#       libsecret and glib are opened with dlopen the first time a secret is needed, so a
+#       program links nothing extra and a system without them reports `unavailable`.
+#       Secrets use a schema `com.luciaos.luce-keychain` with string attributes `service`
+#       and `account`, stored in the default collection; the non-variadic calls
+#       (secret_password_storev_sync and friends) take the attributes as a GHashTable.
+#
+#==============================================================================================
+
+extern func dlopen(file: c.str, mode: i32) -> void*?
+extern func dlsym(handle: void*, name: c.str) -> void*?
+
+## SecretSchemaAttribute and SecretSchema, in their x64 layout.
+struct SchemaAttribute:
+    var name: c.str?
+    var kind: i32
+
+struct Schema:
+    var name: c.str?
+    var flags: i32
+    var attributes: SchemaAttribute[32]
+    var reserved: i32
+    var reserved1: void*?
+    var reserved2: void*?
+    var reserved3: void*?
+    var reserved4: void*?
+    var reserved5: void*?
+    var reserved6: void*?
+    var reserved7: void*?
+
+## GError's head: domain, code, message.
+struct GError:
+    var domain: u32
+    var code: i32
+    var message: c.str?
+
+## The functions this file calls, found once.
+struct Secrets:
+    var ready: bool
+    var store: func(const Schema*, void*, c.str, c.str, c.str, void*?, GError*?*) -> i32
+    var lookup: func(const Schema*, void*, void*?, GError*?*) -> c.str?
+    var clear: func(const Schema*, void*, void*?, GError*?*) -> i32
+    var free_password: func(c.str) -> unit
+    var table_new: func(void*, void*) -> void*?
+    var table_insert: func(void*, c.str, c.str) -> i32
+    var table_unref: func(void*) -> unit
+    var error_free: func(GError*) -> unit
+    var str_hash: void*
+    var str_equal: void*
+
+## The schema every secret here uses; built on first use.
+var schema: Schema
+var secrets: Secrets?
+
+## The library function `name`, or `unavailable`.
+func symbol(library: void*, name: c.str) -> void*!:
+    return dlsym(library, name) else error(unavailable, "the installed libsecret lacks a function luce-keychain needs")
+
+## libsecret and glib, opened once.
+func linux_secrets() -> Secrets!:
+    if let found = secrets:
+        return found
+    let library = dlopen("libsecret-1.so.0", 2) else error(unavailable, "the Secret Service library (libsecret-1.so.0) is not installed")
+    let glib = dlopen("libglib-2.0.so.0", 2) else error(unavailable, "glib (libglib-2.0.so.0) is not installed")
+    let made = Secrets(ready = true,
+        store = (func(const Schema*, void*, c.str, c.str, c.str, void*?, GError*?*) -> i32)(try symbol(library, "secret_password_storev_sync")),
+        lookup = (func(const Schema*, void*, void*?, GError*?*) -> c.str?)(try symbol(library, "secret_password_lookupv_sync")),
+        clear = (func(const Schema*, void*, void*?, GError*?*) -> i32)(try symbol(library, "secret_password_clearv_sync")),
+        free_password = (func(c.str) -> unit)(try symbol(library, "secret_password_free")),
+        table_new = (func(void*, void*) -> void*?)(try symbol(glib, "g_hash_table_new")),
+        table_insert = (func(void*, c.str, c.str) -> i32)(try symbol(glib, "g_hash_table_insert")),
+        table_unref = (func(void*) -> unit)(try symbol(glib, "g_hash_table_unref")),
+        error_free = (func(GError*) -> unit)(try symbol(glib, "g_error_free")),
+        str_hash = try symbol(glib, "g_str_hash"), str_equal = try symbol(glib, "g_str_equal"))
+    schema.name = "com.luciaos.luce-keychain"
+    schema.attributes[0] = SchemaAttribute(name = "service", kind = 0)
+    schema.attributes[1] = SchemaAttribute(name = "account", kind = 0)
+    secrets = made
+    return made
+
+## The attribute table for `service` and `account`, whose NUL-terminated copies the
+## caller releases with the table.
+func linux_attributes(api: Secrets, service: c.str, account: c.str) -> void*!:
+    let table = api.table_new(api.str_hash, api.str_equal) else error(failed, "could not describe the secret")
+    discard(api.table_insert(table, (c.str)"service", service))
+    discard(api.table_insert(table, (c.str)"account", account))
+    return table
+
+## Free the error libsecret reported, if any.
+func linux_forget(api: Secrets, problem: GError*?):
+    if let reported = problem:
+        api.error_free(reported)
+
+func linux_store(service: str, account: str, secret: str) -> !:
+    let api = try linux_secrets()
+    let service_z = try strings.copy(service)
+    defer strings.release(service_z)
+    let account_z = try strings.copy(account)
+    defer strings.release(account_z)
+    let secret_z = try strings.copy(secret)
+    defer strings.release(secret_z)
+    let table = try linux_attributes(api, (c.str)service_z, (c.str)account_z)
+    defer api.table_unref(table)
+    var problem: GError*?
+    var label: u8[600]
+    let text = try format(label, f"{service} ({account})")
+    if api.store(&schema, table, "default", (c.str)text, (c.str)secret_z, none, &problem) == 0:
+        linux_forget(api, problem)
+        error(failed, "the Secret Service refused to keep the secret")
+
+func linux_load(service: str, account: str) -> interop.Owned[str]!:
+    let api = try linux_secrets()
+    let service_z = try strings.copy(service)
+    defer strings.release(service_z)
+    let account_z = try strings.copy(account)
+    defer strings.release(account_z)
+    let table = try linux_attributes(api, (c.str)service_z, (c.str)account_z)
+    defer api.table_unref(table)
+    var problem: GError*?
+    let found = api.lookup(&schema, table, none, &problem)
+    if problem != none:
+        linux_forget(api, problem)
+        error(failed, "the Secret Service refused to read the secret")
+    let password = found else error(not_found, "no secret is kept for that service and account")
+    defer api.free_password(password)
+    let text = str(password) catch failure:
+        error(failed, "the kept secret is not text")
+    return try owned_text(text.bytes)
+
+func linux_remove(service: str, account: str) -> !:
+    let api = try linux_secrets()
+    let service_z = try strings.copy(service)
+    defer strings.release(service_z)
+    let account_z = try strings.copy(account)
+    defer strings.release(account_z)
+    let table = try linux_attributes(api, (c.str)service_z, (c.str)account_z)
+    defer api.table_unref(table)
+    var problem: GError*?
+    discard(api.clear(&schema, table, none, &problem))
+    if problem != none:
+        linux_forget(api, problem)
+        error(failed, "the Secret Service refused to remove the secret")

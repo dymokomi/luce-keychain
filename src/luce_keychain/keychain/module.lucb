@@ -1,0 +1,102 @@
+#==============================================================================================
+#
+#   keychain - Secrets in the system's credential store
+#
+#   DESCRIPTION:
+#       A secret (a password, a token) is kept by the operating system under a service
+#       name and an account: the macOS Keychain (a generic password item), the Windows
+#       Credential Manager (a generic credential named `service/account`) or the Linux
+#       Secret Service through libsecret, which is loaded when first needed so nothing
+#       links against it. Storing replaces any secret already kept for the pair. A Luce
+#       program gets each secret as owned text; nothing is cached here.
+#
+#       Fragments, in ORDER:
+#
+#       module.lucb      the API, error codes and limits
+#       macos.lucb       Security.framework SecItem calls
+#       windows.lucb     advapi32 CredWriteW / CredReadW / CredDeleteW
+#       linux.lucb       libsecret's password calls over glib, through dlopen
+#       tests.lucb       a round trip through the real store
+#
+#==============================================================================================
+
+import c
+import interop
+import memory
+import platform
+import strings
+import utf8
+
+## No secret is kept for that service and account.
+pub let not_found: ErrorCode = ErrorCode.package(1)
+## This system has no credential store this package can reach (no Secret Service).
+pub let unavailable: ErrorCode = ErrorCode.package(2)
+## The store refused the request.
+pub let failed: ErrorCode = ErrorCode.package(3)
+## A service, account or secret that cannot be stored: empty, too long, not UTF-8.
+pub let invalid: ErrorCode = ErrorCode.package(4)
+
+## The longest service or account name accepted.
+pub let maximum_name: usize = 256
+## The largest secret accepted (Windows keeps at most 2560 bytes).
+pub let maximum_secret: usize = 2560
+
+func check_names(service: str, account: str) -> !:
+    for name in [service, account]:
+        if name.length == 0 or name.length > maximum_name:
+            error(invalid, "a keychain service and account must be 1 to 256 bytes")
+        for byte in name.bytes:
+            if byte < 0x20 or byte == 0x7f:
+                error(invalid, "a keychain service or account cannot hold control characters")
+
+## Keep `secret` for `service` and `account`, replacing any secret kept before.
+pub func store(service: str, account: str, secret: str) -> !:
+    try check_names(service, account)
+    if secret.length > maximum_secret:
+        error(invalid, "a keychain secret is at most 2560 bytes")
+    if platform.macos:
+        try mac_store(service, account, secret)
+    elif platform.windows:
+        try windows_store(service, account, secret)
+    elif platform.linux:
+        try linux_store(service, account, secret)
+    else:
+        error(unavailable, "this system has no supported credential store")
+
+## The secret kept for `service` and `account`; fails with `not_found` when there is none.
+pub func load(service: str, account: str) -> interop.Owned[str]!:
+    try check_names(service, account)
+    if platform.macos:
+        return try mac_load(service, account)
+    elif platform.windows:
+        return try windows_load(service, account)
+    elif platform.linux:
+        return try linux_load(service, account)
+    error(unavailable, "this system has no supported credential store")
+
+## Whether a secret is kept for `service` and `account`.
+pub func contains(service: str, account: str) -> bool!:
+    let found = load(service, account) catch failure:
+        if failure.code == not_found:
+            return false
+        error(failure.code, failure.message)
+    found.release()
+    return true
+
+## Forget the secret kept for `service` and `account`; nothing kept is not an error.
+pub func remove(service: str, account: str) -> !:
+    try check_names(service, account)
+    if platform.macos:
+        try mac_remove(service, account)
+    elif platform.windows:
+        try windows_remove(service, account)
+    elif platform.linux:
+        try linux_remove(service, account)
+    else:
+        error(unavailable, "this system has no supported credential store")
+
+## Owned text from the store's bytes, which must be UTF-8 (this package stores only text).
+func owned_text(bytes: const u8[]) -> interop.Owned[str]!:
+    if not utf8.valid(bytes):
+        error(failed, "the kept secret is not text")
+    return try interop.copy_text((str)bytes)

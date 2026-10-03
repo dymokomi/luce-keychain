@@ -1,0 +1,62 @@
+#==============================================================================================
+#
+#   keychain/tests - A round trip through the real credential store
+#
+#   DESCRIPTION:
+#       Uses a service name no program shares and removes what it stores. A system without
+#       a reachable store (a Linux runner with no Secret Service) says so and checks only
+#       the argument validation.
+#
+#==============================================================================================
+
+let test_service: str = "com.luciaos.luce-keychain.test"
+
+test "a secret round-trips, is replaced, and is removed":
+    let probe = contains(test_service, "probe") catch failure:
+        if failure.code == unavailable:
+            print(f"keychain unavailable here: {failure.message}")
+            return
+        error(failure.code, failure.message)
+    discard(probe)
+    try remove(test_service, "alice@example.test")
+    assert(not try contains(test_service, "alice@example.test"))
+    try store(test_service, "alice@example.test", "pässwörd 1")
+    let first = try load(test_service, "alice@example.test")
+    assert(first.value == "pässwörd 1")
+    first.release()
+    try store(test_service, "alice@example.test", "second")
+    let second = try load(test_service, "alice@example.test")
+    assert(second.value == "second")
+    second.release()
+    try store(test_service, "bob@example.test", "")
+    let empty = try load(test_service, "bob@example.test")
+    assert(empty.value == "")
+    empty.release()
+    try remove(test_service, "alice@example.test")
+    try remove(test_service, "bob@example.test")
+    try remove(test_service, "bob@example.test")
+    var missing = false
+    let gone = load(test_service, "alice@example.test") catch failure:
+        assert(failure.code == not_found)
+        missing = true
+        recover try interop.copy_text("")
+    gone.release()
+    assert(missing)
+
+test "names and secrets are checked before the store sees them":
+    var refusals: usize = 0
+    for (service, account) in [("", "a"), ("s", ""), ("s", "line\nbreak")]:
+        store(service, account, "x") catch failure:
+            assert(failure.code == invalid)
+            refusals += 1
+            continue
+    assert(refusals == 3)
+    var big: u8[2600]
+    for at in 0..<big.length:
+        big[at] = 'x'
+    var refused = false
+    store(test_service, "big", (str)big[0..<2600]) catch failure:
+        assert(failure.code == invalid)
+        refused = true
+        recover ()
+    assert(refused)

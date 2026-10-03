@@ -1,0 +1,96 @@
+#==============================================================================================
+#
+#   keychain/windows - Generic credentials in the Windows Credential Manager
+#
+#   DESCRIPTION:
+#       Each secret is a CRED_TYPE_GENERIC credential named `service/account`, kept for the
+#       local machine's user (CRED_PERSIST_LOCAL_MACHINE), its blob the secret's UTF-8 bytes.
+#
+#==============================================================================================
+
+## CREDENTIALW, in the x64 layout.
+struct WinCredential:
+    var flags: u32
+    var kind: u32
+    var target: u16*?
+    var comment: u16*?
+    var written_low: u32
+    var written_high: u32
+    var blob_size: u32
+    var blob: const u8*?
+    var persist: u32
+    var attribute_count: u32
+    var attributes: void*?
+    var alias: u16*?
+    var user: u16*?
+
+extern func CredWriteW(credential: const WinCredential*, flags: u32) -> i32
+extern func CredReadW(target: const u16*, kind: u32, flags: u32, credential: WinCredential*?*) -> i32
+extern func CredDeleteW(target: const u16*, kind: u32, flags: u32) -> i32
+extern func CredFree(buffer: void*)
+extern func GetLastError() -> u32
+
+let credential_generic: u32 = 1
+let persist_local_machine: u32 = 2
+let error_not_found: u32 = 1168
+
+## `service/account` as NUL-terminated UTF-16 in `out`; its unit count without the NUL.
+func windows_target(service: str, account: str, out: u16[]) -> usize!:
+    var count: usize = 0
+    for part in [service, "/", account]:
+        for character in part:
+            let scalar = (u32)character
+            if count + 3 > out.length:
+                error(invalid, "the keychain item name is too long")
+            if scalar >= 0x10000:
+                out[count] = (u16)(0xD800 + ((scalar - 0x10000) >> 10))
+                out[count + 1] = (u16)(0xDC00 + ((scalar - 0x10000) & 0x3FF))
+                count += 2
+            else:
+                out[count] = (u16)scalar
+                count += 1
+    out[count] = 0
+    return count
+
+func windows_store(service: str, account: str, secret: str) -> !:
+    var target: u16[600]
+    discard(try windows_target(service, account, target))
+    var user: u16[300]
+    var units: usize = 0
+    for character in account:
+        let scalar = (u32)character
+        if units + 3 > user.length:
+            error(invalid, "the keychain account is too long")
+        if scalar >= 0x10000:
+            user[units] = (u16)(0xD800 + ((scalar - 0x10000) >> 10))
+            user[units + 1] = (u16)(0xDC00 + ((scalar - 0x10000) & 0x3FF))
+            units += 2
+        else:
+            user[units] = (u16)scalar
+            units += 1
+    user[units] = 0
+    let credential = WinCredential(kind = credential_generic, target = &target[0], blob_size = (u32)secret.length,
+                                   blob = secret.bytes.data if secret.length > 0 else none, persist = persist_local_machine, user = &user[0])
+    if CredWriteW(&credential, 0) == 0:
+        error(failed, "the Credential Manager refused to keep the secret")
+
+func windows_load(service: str, account: str) -> interop.Owned[str]!:
+    var target: u16[600]
+    discard(try windows_target(service, account, target))
+    var found: WinCredential*?
+    if CredReadW(&target[0], credential_generic, 0, &found) == 0:
+        if GetLastError() == error_not_found:
+            error(not_found, "no secret is kept for that service and account")
+        error(failed, "the Credential Manager refused to read the secret")
+    let credential = found else error(failed, "the Credential Manager returned nothing")
+    defer CredFree((void*)credential)
+    if credential.blob_size == 0:
+        return try owned_text(b"")
+    let blob = credential.blob else error(failed, "the Credential Manager returned no secret")
+    return try owned_text(u8[]((u8*)blob, (usize)credential.blob_size))
+
+func windows_remove(service: str, account: str) -> !:
+    var target: u16[600]
+    discard(try windows_target(service, account, target))
+    if CredDeleteW(&target[0], credential_generic, 0) == 0 and GetLastError() != error_not_found:
+        error(failed, "the Credential Manager refused to remove the secret")

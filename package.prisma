@@ -1,0 +1,27 @@
+#prisma 4.0
+def package "luce-keychain" {
+    str owner = "dymokomi"
+    str version = "0.1.0"
+    str kind = "package"
+    str language = "luce-base"
+    str description = "Secrets in the system's own credential store: the macOS Keychain, the Windows Credential Manager and the Linux Secret Service (libsecret, loaded at run time). Store, load and remove a secret by service and account."
+    str readme = "README.md"
+
+    def export "keychain" {
+        str module = "luce_keychain.keychain"
+    }
+
+    def dependency "luce-std" {
+        str owner = "dymokomi"
+        str version = "^0.1.5"
+        str path = "../luce-std"
+    }
+
+    def native "macos" {
+        str[] frameworks = ["Security", "CoreFoundation"]
+    }
+
+    def native "windows" {
+        str[] libraries = ["advapi32"]
+    }
+}

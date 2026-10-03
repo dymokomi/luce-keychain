@@ -1,0 +1,113 @@
+#==============================================================================================
+#
+#   keychain/macos - Generic passwords in the macOS Keychain
+#
+#   DESCRIPTION:
+#       Each secret is a kSecClassGenericPassword item keyed by kSecAttrService and
+#       kSecAttrAccount, in the user's default keychain. Storing adds the item, or updates
+#       its data when it exists; loading copies the data out; removing deletes it.
+#
+#==============================================================================================
+
+extern var kSecClass: void*
+extern var kSecClassGenericPassword: void*
+extern var kSecAttrService: void*
+extern var kSecAttrAccount: void*
+extern var kSecAttrLabel: void*
+extern var kSecValueData: void*
+extern var kSecReturnData: void*
+extern var kSecMatchLimit: void*
+extern var kSecMatchLimitOne: void*
+extern var kCFBooleanTrue: void*
+## CoreFoundation's retaining callbacks are structs; only their addresses are needed.
+extern var kCFTypeDictionaryKeyCallBacks: u8
+extern var kCFTypeDictionaryValueCallBacks: u8
+
+extern func SecItemAdd(attributes: void*, result: void*?*?) -> i32
+extern func SecItemCopyMatching(query: void*, result: void*?*?) -> i32
+extern func SecItemUpdate(query: void*, changes: void*) -> i32
+extern func SecItemDelete(query: void*) -> i32
+extern func CFDictionaryCreateMutable(allocator: void*?, capacity: i64, keys: void*?, values: void*?) -> void*?
+extern func CFDictionarySetValue(dictionary: void*, key: void*, value: void*)
+extern func CFStringCreateWithBytes(allocator: void*?, bytes: const u8*, count: i64, encoding: u32, external: bool) -> void*?
+extern func CFDataCreate(allocator: void*?, bytes: const u8*, length: i64) -> void*?
+extern func CFDataGetLength(data: void*) -> i64
+extern func CFDataGetBytePtr(data: void*) -> const u8*?
+extern func CFRelease(object: void*)
+
+let error_item_not_found: i32 = -25300
+let error_duplicate_item: i32 = -25299
+## kCFStringEncodingUTF8.
+let utf8_encoding: u32 = 0x08000100
+
+## A CoreFoundation string of `text`.
+func mac_text(text: str) -> void*!:
+    return CFStringCreateWithBytes(none, text.bytes.data, (i64)text.length, utf8_encoding, false) else error(failed, "could not describe the keychain item")
+
+## A dictionary naming the generic password for `service` and `account`. The caller
+## releases it and the strings in `owned`.
+func mac_query(service: str, account: str, owned: (void*?)[]) -> void*!:
+    let query = CFDictionaryCreateMutable(none, 6, (void*)&kCFTypeDictionaryKeyCallBacks, (void*)&kCFTypeDictionaryValueCallBacks) else error(failed, "could not describe the keychain item")
+    let service_text = try mac_text(service)
+    owned[0] = service_text
+    let account_text = try mac_text(account)
+    owned[1] = account_text
+    CFDictionarySetValue(query, kSecClass, kSecClassGenericPassword)
+    CFDictionarySetValue(query, kSecAttrService, service_text)
+    CFDictionarySetValue(query, kSecAttrAccount, account_text)
+    return query
+
+func mac_release(query: void*, owned: (void*?)[]):
+    CFRelease(query)
+    for at in 0..<4:
+        if let object = owned[at]:
+            CFRelease(object)
+
+## The error code for Security status `status`.
+func mac_code(status: i32) -> ErrorCode:
+    return not_found if status == error_item_not_found else failed
+
+func mac_store(service: str, account: str, secret: str) -> !:
+    var owned: (void*?)[4]
+    let query = try mac_query(service, account, owned)
+    defer mac_release(query, owned)
+    let data = CFDataCreate(none, secret.bytes.data, (i64)secret.length) else error(failed, "could not describe the keychain item")
+    owned[2] = data
+    let changes = CFDictionaryCreateMutable(none, 1, (void*)&kCFTypeDictionaryKeyCallBacks, (void*)&kCFTypeDictionaryValueCallBacks) else error(failed, "could not describe the keychain item")
+    owned[3] = changes
+    CFDictionarySetValue(changes, kSecValueData, data)
+    let updated = SecItemUpdate(query, changes)
+    if updated == 0:
+        return
+    if updated != error_item_not_found:
+        error(failed, "the keychain refused to update the secret")
+    CFDictionarySetValue(query, kSecValueData, data)
+    let added = SecItemAdd(query, none)
+    if added != 0:
+        error(failed, "the keychain refused to keep the secret")
+
+func mac_load(service: str, account: str) -> interop.Owned[str]!:
+    var owned: (void*?)[4]
+    let query = try mac_query(service, account, owned)
+    defer mac_release(query, owned)
+    CFDictionarySetValue(query, kSecReturnData, kCFBooleanTrue)
+    CFDictionarySetValue(query, kSecMatchLimit, kSecMatchLimitOne)
+    var result: void*?
+    let status = SecItemCopyMatching(query, &result)
+    if status != 0:
+        error(mac_code(status), "the keychain has no such secret, or refused to read it")
+    let data = result else error(failed, "the keychain returned no data")
+    defer CFRelease(data)
+    let length = CFDataGetLength(data)
+    if length == 0:
+        return try owned_text(b"")
+    let start = CFDataGetBytePtr(data) else error(failed, "the keychain returned no data")
+    return try owned_text(u8[]((u8*)start, (usize)length))
+
+func mac_remove(service: str, account: str) -> !:
+    var owned: (void*?)[4]
+    let query = try mac_query(service, account, owned)
+    defer mac_release(query, owned)
+    let status = SecItemDelete(query)
+    if status != 0 and status != error_item_not_found:
+        error(failed, "the keychain refused to remove the secret")
