@@ -10,7 +10,7 @@ Secrets in the system's own credential store, for
 | Linux | the Secret Service through libsecret, loaded at run time with `dlopen`; nothing is linked |
 
 ```luce
-import luce_keychain.keychain
+from luce_keychain import keychain
 
 keychain.store("com.example.mail", "alice@example.com", password)
 let password = keychain.load("com.example.mail", "alice@example.com")   # fails with not_found when absent
