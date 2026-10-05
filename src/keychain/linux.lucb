@@ -67,15 +67,15 @@ func linux_secrets() -> Secrets!:
     let library = dlopen("libsecret-1.so.0", 2) else error(unavailable, "the Secret Service library (libsecret-1.so.0) is not installed")
     let glib = dlopen("libglib-2.0.so.0", 2) else error(unavailable, "glib (libglib-2.0.so.0) is not installed")
     let made = Secrets(ready = true,
-        store = (func(const Schema*, void*, c.str, c.str, c.str, void*?, GError*?*) -> i32)(try symbol(library, "secret_password_storev_sync")),
-        lookup = (func(const Schema*, void*, void*?, GError*?*) -> c.str?)(try symbol(library, "secret_password_lookupv_sync")),
-        clear = (func(const Schema*, void*, void*?, GError*?*) -> i32)(try symbol(library, "secret_password_clearv_sync")),
-        free_password = (func(c.str) -> unit)(try symbol(library, "secret_password_free")),
-        table_new = (func(void*, void*) -> void*?)(try symbol(glib, "g_hash_table_new")),
-        table_insert = (func(void*, c.str, c.str) -> i32)(try symbol(glib, "g_hash_table_insert")),
-        table_unref = (func(void*) -> unit)(try symbol(glib, "g_hash_table_unref")),
-        error_free = (func(GError*) -> unit)(try symbol(glib, "g_error_free")),
-        str_hash = try symbol(glib, "g_str_hash"), str_equal = try symbol(glib, "g_str_equal"))
+                       store = (func(const Schema*, void*, c.str, c.str, c.str, void*?, GError*?*) -> i32)(try symbol(library, "secret_password_storev_sync")),
+                       lookup = (func(const Schema*, void*, void*?, GError*?*) -> c.str?)(try symbol(library, "secret_password_lookupv_sync")),
+                       clear = (func(const Schema*, void*, void*?, GError*?*) -> i32)(try symbol(library, "secret_password_clearv_sync")),
+                       free_password = (func(c.str) -> unit)(try symbol(library, "secret_password_free")),
+                       table_new = (func(void*, void*) -> void*?)(try symbol(glib, "g_hash_table_new")),
+                       table_insert = (func(void*, c.str, c.str) -> i32)(try symbol(glib, "g_hash_table_insert")),
+                       table_unref = (func(void*) -> unit)(try symbol(glib, "g_hash_table_unref")),
+                       error_free = (func(GError*) -> unit)(try symbol(glib, "g_error_free")),
+                       str_hash = try symbol(glib, "g_str_hash"), str_equal = try symbol(glib, "g_str_equal"))
     schema.name = "com.luciaos.luce-keychain"
     schema.attributes[0] = SchemaAttribute(name = "service", kind = 0)
     schema.attributes[1] = SchemaAttribute(name = "account", kind = 0)
@@ -86,8 +86,8 @@ func linux_secrets() -> Secrets!:
 ## caller releases with the table.
 func linux_attributes(api: Secrets, service: c.str, account: c.str) -> void*!:
     let table = api.table_new(api.str_hash, api.str_equal) else error(failed, "could not describe the secret")
-    discard(api.table_insert(table, (c.str)"service", service))
-    discard(api.table_insert(table, (c.str)"account", account))
+    _ = api.table_insert(table, (c.str)"service", service)
+    _ = api.table_insert(table, (c.str)"account", account)
     return table
 
 ## Free the error libsecret reported, if any.
@@ -107,7 +107,7 @@ func linux_store(service: str, account: str, secret: str) -> !:
     defer api.table_unref(table)
     var problem: GError*?
     var label: u8[600]
-    let text = try format(label, f"{service} ({account})")
+    let text = try strings.format(label, f"{service} ({account})")
     if api.store(&schema, table, "default", (c.str)text, (c.str)secret_z, none, &problem) == 0:
         linux_forget(api, problem)
         error(failed, "the Secret Service refused to keep the secret")
@@ -140,7 +140,7 @@ func linux_remove(service: str, account: str) -> !:
     let table = try linux_attributes(api, (c.str)service_z, (c.str)account_z)
     defer api.table_unref(table)
     var problem: GError*?
-    discard(api.clear(&schema, table, none, &problem))
+    _ = api.clear(&schema, table, none, &problem)
     if problem != none:
         linux_forget(api, problem)
         error(failed, "the Secret Service refused to remove the secret")

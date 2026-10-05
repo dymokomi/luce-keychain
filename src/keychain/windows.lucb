@@ -54,7 +54,7 @@ func windows_target(service: str, account: str, out: u16[]) -> usize!:
 
 func windows_store(service: str, account: str, secret: str) -> !:
     var target: u16[600]
-    discard(try windows_target(service, account, target))
+    _ = try windows_target(service, account, target)
     var user: u16[300]
     var units: usize = 0
     for character in account:
@@ -76,7 +76,7 @@ func windows_store(service: str, account: str, secret: str) -> !:
 
 func windows_load(service: str, account: str) -> interop.Owned[str]!:
     var target: u16[600]
-    discard(try windows_target(service, account, target))
+    _ = try windows_target(service, account, target)
     var found: WinCredential*?
     if CredReadW(&target[0], credential_generic, 0, &found) == 0:
         if GetLastError() == error_not_found:
@@ -91,6 +91,6 @@ func windows_load(service: str, account: str) -> interop.Owned[str]!:
 
 func windows_remove(service: str, account: str) -> !:
     var target: u16[600]
-    discard(try windows_target(service, account, target))
+    _ = try windows_target(service, account, target)
     if CredDeleteW(&target[0], credential_generic, 0) == 0 and GetLastError() != error_not_found:
         error(failed, "the Credential Manager refused to remove the secret")

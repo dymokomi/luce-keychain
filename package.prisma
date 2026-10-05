@@ -1,7 +1,7 @@
 #prisma 4.0
 def package "luce-keychain" {
     str owner = "dymokomi"
-    str version = "0.2.2"
+    str version = "0.3.0"
     str kind = "package"
     str language = "luce-base"
     str description = "Secrets in the system's own credential store: the macOS Keychain, the Windows Credential Manager and the Linux Secret Service (libsecret, loaded at run time). Store, load and remove a secret by service and account."
@@ -10,7 +10,7 @@ def package "luce-keychain" {
 
     def dependency "luce-std" {
         str owner = "dymokomi"
-        str version = "^0.3.1"
+        str version = "^0.4.0"
         str path = "../luce-std"
     }
 

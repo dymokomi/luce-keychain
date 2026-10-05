@@ -17,7 +17,7 @@ test "a secret round-trips, is replaced, and is removed":
             print(f"keychain unavailable here: {failure.message}")
             return
         error(failure.code, failure.message)
-    discard(probe)
+    _ = probe
     try remove(test_service, "alice@example.test")
     assert(not try contains(test_service, "alice@example.test"))
     try store(test_service, "alice@example.test", "pässwörd 1")
