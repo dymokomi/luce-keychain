@@ -4,20 +4,20 @@
 #
 #   DESCRIPTION:
 #       Uses a service name no program shares and removes what it stores. A system without
-#       a reachable store (a Linux runner with no Secret Service) says so and checks only
-#       the argument validation.
+#       a reachable store (a Linux runner with no Secret Service, a macOS run with a scratch
+#       HOME and so no default keychain) says so and checks only the argument validation.
 #
 #==============================================================================================
 
 let test_service: str = "com.luciaos.luce-keychain.test"
 
 test "a secret round-trips, is replaced, and is removed":
-    let probe = contains(test_service, "probe") catch failure:
+    store(test_service, "probe", "x") catch failure:
         if failure.code == unavailable:
             print(f"keychain unavailable here: {failure.message}")
             return
         error(failure.code, failure.message)
-    _ = probe
+    try remove(test_service, "probe")
     try remove(test_service, "alice@example.test")
     assert(not try contains(test_service, "alice@example.test"))
     try store(test_service, "alice@example.test", "pässwörd 1")

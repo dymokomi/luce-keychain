@@ -5,7 +5,10 @@
 #   DESCRIPTION:
 #       Each secret is a kSecClassGenericPassword item keyed by kSecAttrService and
 #       kSecAttrAccount, in the user's default keychain. Storing adds the item, or updates
-#       its data when it exists; loading copies the data out; removing deletes it.
+#       its data when it exists; loading copies the data out; removing deletes it. An
+#       account with no default keychain (a process given a scratch HOME, as a test run
+#       or CI may be) cannot store, and says `unavailable` rather than letting the system
+#       ask the user to create one.
 #
 #==============================================================================================
 
@@ -34,9 +37,11 @@ extern func CFDataCreate(allocator: void*?, bytes: const u8*, length: i64) -> vo
 extern func CFDataGetLength(data: void*) -> i64
 extern func CFDataGetBytePtr(data: void*) -> const u8*?
 extern func CFRelease(object: void*)
+extern func SecKeychainCopyDefault(keychain: void*?*) -> i32
 
 let error_item_not_found: i32 = -25300
 let error_duplicate_item: i32 = -25299
+let error_no_default_keychain: i32 = -25307
 ## kCFStringEncodingUTF8.
 let utf8_encoding: u32 = 0x08000100
 
@@ -81,10 +86,21 @@ func mac_store(service: str, account: str, secret: str) -> !:
         return
     if updated != error_item_not_found:
         error(failed, "the keychain refused to update the secret")
+    try mac_require_default()
     CFDictionarySetValue(query, kSecValueData, data)
     let added = SecItemAdd(query, none)
     if added != 0:
         error(failed, "the keychain refused to keep the secret")
+
+## A new item goes into the default keychain. Without one, SecItemAdd would show the
+## user a dialog asking for one and wait on it; this answers `unavailable` instead.
+func mac_require_default() -> !:
+    var keychain: void*? = none
+    let status = SecKeychainCopyDefault(&keychain)
+    if let found = keychain:
+        CFRelease(found)
+    if status == error_no_default_keychain:
+        error(unavailable, "this account has no default keychain to keep the secret in")
 
 func mac_load(service: str, account: str) -> interop.Owned[str]!:
     var owned: (void*?)[4]
