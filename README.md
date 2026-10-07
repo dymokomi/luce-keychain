@@ -29,7 +29,7 @@ From Base, `load` returns an `interop.Owned[str]`; release it when done.
 ## Test
 
 ```sh
-./test.sh
+luc test
 ```
 
 The tests make a round trip through the real store, under the service
